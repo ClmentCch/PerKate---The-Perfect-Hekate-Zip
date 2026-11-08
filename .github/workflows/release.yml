@@ -1,0 +1,75 @@
+name: Publish PerKate release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pack/**"
+      - "scripts/**"
+      - "docs/**"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: perkate-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check whether the release already exists
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view v1.0.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Release v1.0.0 already exists; nothing to publish."
+          elif git ls-remote --exit-code --tags origin refs/tags/v1.0.0 >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Tag v1.0.0 exists without a release; refusing to overwrite."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and verify package
+        if: steps.existing.outputs.exists == 'false'
+        run: bash scripts/build-perkate.sh
+
+      - name: Create GitHub release
+        if: steps.existing.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ZIP="dist/PerKate - The Perfect Hekate Zip.zip"
+          SHA="$(sha256sum "$ZIP")"
+          SIZE="$(stat -c%s "$ZIP")"
+          {
+            cat docs/RELEASE_NOTES.md
+            echo
+            echo "## Package checksum"
+            echo
+            echo '```'
+            echo "$SHA"
+            echo '```'
+            echo
+            echo "ZIP size: ${SIZE} bytes."
+          } > dist/release-notes.md
+
+          gh release create v1.0.0 "$ZIP" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "PerKate - The Perfect Hekate Zip." \
+            --notes-file dist/release-notes.md
+
+      - name: Report skip
+        if: steps.existing.outputs.exists == 'true'
+        run: echo "Release v1.0.0 already present, publication skipped."
